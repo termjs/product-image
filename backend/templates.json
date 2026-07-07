@@ -1,1 +1,10 @@
-{}
+{
+  "te": {
+    "template_path": "templates/te_template.png",
+    "width": 273,
+    "height": 390,
+    "target_width": 280,
+    "target_height": 400
+  },
+  "_scale_factor": 1.0256410256410255
+}
