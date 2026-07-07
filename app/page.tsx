@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 
-export default function ImageProcessor() {
+export default function ImageRescaler() {
   const [mode, setMode] = useState<"template" | "process">("template");
   const [templates, setTemplates] = useState<string[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<string>("default");
@@ -10,7 +10,7 @@ export default function ImageProcessor() {
 
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string>("");
-  const [trafaretasPreview, setTrafaretasPreview] = useState<string>("");
+  const [templatePreview, setTemplatePreview] = useState<string>("");
   const [processedImage, setProcessedImage] = useState<string>("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
@@ -31,23 +31,23 @@ export default function ImageProcessor() {
       setTemplates(data.templates || []);
       if (data.templates.length > 0) {
         setSelectedTemplate(data.templates[0]);
-        loadTrafaretas(data.templates[0]);
+        loadTemplatePreview(data.templates[0]);
       }
     } catch (err) {
       console.error("Failed to load templates:", err);
     }
   };
 
-  const loadTrafaretas = async (templateName: string) => {
+  const loadTemplatePreview = async (templateName: string) => {
     try {
       const response = await fetch(
-        `http://localhost:5000/get-trafaretas/${templateName}`,
+        `http://localhost:5000/get-template/${templateName}`,
       );
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
-      setTrafaretasPreview(url);
+      setTemplatePreview(url);
     } catch (err) {
-      console.error("Failed to load trafaretas:", err);
+      console.error("Failed to load template:", err);
     }
   };
 
@@ -68,7 +68,7 @@ export default function ImageProcessor() {
 
   const handleCreateTemplate = async () => {
     if (!selectedFile || !templateName.trim()) {
-      setError("Please provide both image and template name");
+      setError("Please provide both an image and a template name");
       return;
     }
 
@@ -174,10 +174,11 @@ export default function ImageProcessor() {
         {/* Header */}
         <div className="text-center mb-16">
           <h1 className="text-5xl sm:text-6xl font-semibold tracking-tight mb-4">
-            Product Image Processor
+            Product Image Rescaler
           </h1>
           <p className="text-lg text-gray-400">
-            Standardize your product images with precision and consistency
+            Trace a reference product once. Every other image is traced and
+            scale-matched to it, output as a clean 500×500 image.
           </p>
         </div>
 
@@ -201,7 +202,7 @@ export default function ImageProcessor() {
                 : "text-gray-500 hover:text-gray-300 border-b-2 border-transparent"
             }`}
           >
-            Process Image
+            Rescale Image
           </button>
         </div>
 
@@ -213,7 +214,9 @@ export default function ImageProcessor() {
               <div className="text-center mb-10">
                 <h2 className="text-2xl font-semibold mb-3">Create Template</h2>
                 <p className="text-gray-400">
-                  Upload a reference image to create a standardized template.
+                  Upload a reference product photo. The real product is traced
+                  out (background ignored) and its size/position becomes the
+                  target for every image matched against it.
                 </p>
               </div>
 
@@ -262,7 +265,7 @@ export default function ImageProcessor() {
                     disabled={!selectedFile || !templateName.trim() || loading}
                     className="flex-1 h-11 px-6 bg-white text-black text-sm rounded-lg hover:bg-gray-100 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed transition-all cursor-pointer"
                   >
-                    {loading ? "Creating..." : "Create Template"}
+                    {loading ? "Tracing..." : "Create Template"}
                   </button>
                   <button
                     onClick={handleReset}
@@ -277,9 +280,10 @@ export default function ImageProcessor() {
             <>
               {/* Process Mode */}
               <div className="text-center mb-10">
-                <h2 className="text-2xl font-semibold mb-3">Process Image</h2>
+                <h2 className="text-2xl font-semibold mb-3">Rescale Image</h2>
                 <p className="text-gray-400">
-                  Upload an image to match it to your template specifications.
+                  Upload any product photo. It's traced, scale-matched to the
+                  template 1:1, and output as a clean 500×500 image.
                 </p>
               </div>
 
@@ -298,7 +302,7 @@ export default function ImageProcessor() {
                       value={selectedTemplate}
                       onChange={(e) => {
                         setSelectedTemplate(e.target.value);
-                        loadTrafaretas(e.target.value);
+                        loadTemplatePreview(e.target.value);
                       }}
                       className="w-full px-4 py-3 bg-black/50 border border-zinc-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-white/20 focus:border-transparent transition-all cursor-pointer appearance-none pr-10"
                     >
@@ -351,7 +355,7 @@ export default function ImageProcessor() {
                     disabled={!selectedFile || !selectedTemplate || loading}
                     className="flex-1 h-11 px-6 bg-white text-black text-sm rounded-lg hover:bg-gray-100 disabled:bg-zinc-800 disabled:text-zinc-600 disabled:cursor-not-allowed transition-all cursor-pointer"
                   >
-                    {loading ? "Processing..." : "Process Image"}
+                    {loading ? "Tracing & Rescaling..." : "Rescale Image"}
                   </button>
                   <button
                     onClick={handleReset}
@@ -374,14 +378,14 @@ export default function ImageProcessor() {
 
         {/* Image Preview Grid */}
         <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-          {mode === "process" && trafaretasPreview && (
+          {mode === "process" && templatePreview && (
             <div className="border border-zinc-800 rounded-xl p-5 bg-linear-to-b from-zinc-900/30 to-transparent">
               <h3 className="text-xs font-semibold text-gray-500 mb-4 uppercase tracking-wider">
-                Template
+                Template (traced)
               </h3>
               <div className="relative aspect-square bg-zinc-950 rounded-lg overflow-hidden border border-zinc-900">
                 <img
-                  src={trafaretasPreview}
+                  src={templatePreview}
                   alt="Template"
                   className="w-full h-full object-contain p-3"
                 />
@@ -407,7 +411,7 @@ export default function ImageProcessor() {
           {processedImage && (
             <div className="border border-zinc-800 rounded-xl p-5 bg-linear-to-b from-zinc-900/30 to-transparent">
               <h3 className="text-xs font-semibold text-gray-500 mb-4 uppercase tracking-wider">
-                Result
+                Result (500×500)
               </h3>
               <div className="relative aspect-square bg-zinc-950 rounded-lg overflow-hidden border border-zinc-900">
                 <img
@@ -441,15 +445,15 @@ export default function ImageProcessor() {
                   <ul className="space-y-3 text-gray-400 leading-relaxed">
                     <li className="flex items-start gap-3">
                       <span className="text-gray-600 mt-1">•</span>
-                      <span>Upload reference product image</span>
+                      <span>Upload a reference product photo</span>
                     </li>
                     <li className="flex items-start gap-3">
                       <span className="text-gray-600 mt-1">•</span>
-                      <span>System creates silhouette template</span>
+                      <span>System traces the real product only</span>
                     </li>
                     <li className="flex items-start gap-3">
                       <span className="text-gray-600 mt-1">•</span>
-                      <span>Stores dimensions and positioning</span>
+                      <span>Stores its size and position as the target</span>
                     </li>
                   </ul>
                 </div>
@@ -461,19 +465,19 @@ export default function ImageProcessor() {
                   2
                 </div>
                 <div>
-                  <h4 className="font-semibold mb-4 text-lg">Process Images</h4>
+                  <h4 className="font-semibold mb-4 text-lg">Rescale Image</h4>
                   <ul className="space-y-3 text-gray-400 leading-relaxed">
                     <li className="flex items-start gap-3">
                       <span className="text-gray-600 mt-1">•</span>
-                      <span>Upload any product image</span>
+                      <span>Upload any product photo</span>
                     </li>
                     <li className="flex items-start gap-3">
                       <span className="text-gray-600 mt-1">•</span>
-                      <span>Matches template specifications</span>
+                      <span>Traces and matches the template's scale 1:1</span>
                     </li>
                     <li className="flex items-start gap-3">
                       <span className="text-gray-600 mt-1">•</span>
-                      <span>Outputs standardized 500×500px</span>
+                      <span>White-filled, output at clean 500×500px</span>
                     </li>
                   </ul>
                 </div>
