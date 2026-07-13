@@ -1,6 +1,6 @@
 from flask import Flask, request, send_file, jsonify
 from flask_cors import CORS
-from PIL import Image
+from PIL import Image, ImageFilter
 import numpy as np
 from rembg import remove
 from scipy import ndimage
@@ -15,11 +15,11 @@ CORS(app, expose_headers=['Content-Disposition'])
 OUTPUT_DIR = "output"
 TEMPLATES_DIR = "templates"
 TEMPLATES_FILE = "templates.json"
-CANVAS_SIZE = 500
+CANVAS_SIZE = 700
 
 # Largest dimension of the FIRST registered template will be scaled to use
 # at most this fraction of the canvas. This is what keeps templates (and
-# therefore everything matched against them) from overflowing 500x500.
+# therefore everything matched against them) from overflowing the canvas.
 # Lowered slightly from 0.85 to leave headroom for BBOX_PADDING_FRACTION
 # below, so the padded (slightly larger) product still comfortably fits.
 MAX_TEMPLATE_FRACTION = 0.80
@@ -30,6 +30,21 @@ MAX_TEMPLATE_FRACTION = 0.80
 # the raw bbox a few pixels tighter than the real product. Padding gives a
 # buffer so those small inaccuracies don't clip into the product itself.
 BBOX_PADDING_FRACTION = 0.06
+
+# If an uploaded photo has to be enlarged by more than this factor to hit
+# its target size, LANCZOS is being asked to invent detail that isn't in
+# the source pixels and the result will look visibly soft. We still
+# process the image (never hard-fail on this), but flag it in the
+# response so the caller can warn the user / ask for a higher-res photo.
+UPSCALE_WARNING_THRESHOLD = 1.5
+
+# Unsharp mask applied only when we're upscaling (fit_scale > 1). This
+# doesn't recover real detail, but it counteracts the perceptual softness
+# LANCZOS upscaling introduces, similar to what you'd apply manually in
+# Photoshop after an enlargement.
+UNSHARP_RADIUS = 1.4
+UNSHARP_PERCENT = 60
+UNSHARP_THRESHOLD = 2
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMPLATES_DIR, exist_ok=True)
@@ -150,21 +165,34 @@ def get_scale_factor(templates, bbox_w, bbox_h):
     """
     Returns the shared calibration factor used to convert a template's raw
     reference-photo bbox (in pixels) into a target size that actually fits
-    the 500x500 canvas.
+    the canvas.
 
-    If a scale factor has already been established (i.e. at least one
-    template has been registered before), reuse it — this is what keeps
+    If a scale factor has already been established for the CURRENT
+    CANVAS_SIZE (i.e. at least one template has been registered before,
+    since CANVAS_SIZE last changed), reuse it — this is what keeps
     relative real-world size consistent across templates (a 5L jug stays
     bigger than a 1L bottle) instead of every template being independently
     normalized to fill the canvas (which would make them all look the same
     size regardless of real-world size).
 
-    If this is the FIRST template being registered, derive a new factor so
-    that this template's largest dimension uses MAX_TEMPLATE_FRACTION of
-    the canvas, leaving some margin instead of touching the edges.
+    The cached factor is keyed to the CANVAS_SIZE it was computed against
+    (stored as "_scale_factor_canvas_size"). If CANVAS_SIZE has been
+    changed since the factor was cached, it's treated as stale and
+    recomputed — otherwise templates registered under an old canvas size
+    (e.g. 500) silently keep using a factor calibrated for that old size
+    even after the code is updated to a new one (e.g. 700), which is a
+    common source of "why did quality change after I edited the constant"
+    confusion.
+
+    If no valid cached factor exists, derive a new one so that this
+    template's largest dimension uses MAX_TEMPLATE_FRACTION of the
+    canvas, leaving some margin instead of touching the edges.
     """
-    if "_scale_factor" in templates:
-        return templates["_scale_factor"]
+    cached_factor = templates.get("_scale_factor")
+    cached_canvas_size = templates.get("_scale_factor_canvas_size")
+
+    if cached_factor is not None and cached_canvas_size == CANVAS_SIZE:
+        return cached_factor
 
     largest_dim = max(bbox_w, bbox_h)
     if largest_dim <= 0:
@@ -204,7 +232,7 @@ def register_template(image_path, template_name):
     IMPORTANT: target_width/target_height are derived from the cropped
     product's actual pixel size (width/height) scaled by a shared
     calibration factor (see get_scale_factor) — NOT the raw photo pixels.
-    This is what keeps a template's target size inside the 500x500 canvas
+    This is what keeps a template's target size inside the canvas
     regardless of the resolution/zoom of the original reference photo,
     while still preserving the real relative size of the product as it
     was in the reference photo. Uploaded product photos are later matched
@@ -253,8 +281,11 @@ def register_template(image_path, template_name):
     }
 
     templates[template_name] = metadata
-    # Persist the calibration factor so every future template reuses it.
+    # Persist the calibration factor AND the canvas size it was computed
+    # against, so a future CANVAS_SIZE change is detected and the factor
+    # is recalculated instead of silently reused (see get_scale_factor).
     templates['_scale_factor'] = scale_factor
+    templates['_scale_factor_canvas_size'] = CANVAS_SIZE
     save_templates(templates)
 
     return template_path, metadata
@@ -293,6 +324,21 @@ def rescale_to_template(user_image_path, template_name):
     scaled_h = max(1, round(original.height * fit_scale))
     scaled_original = original.resize((scaled_w, scaled_h), Image.Resampling.LANCZOS)
 
+    # LANCZOS produces a sharp result when downscaling, but any resampler
+    # is fundamentally inventing pixels when upscaling (fit_scale > 1) —
+    # there's no real detail beyond what the source photo captured, so the
+    # result reads as soft. A mild unsharp mask compensates perceptually.
+    # Only applied on upscale so downscaled images (already sharp) aren't
+    # over-sharpened into halos/artifacts.
+    if fit_scale > 1.0:
+        scaled_original = scaled_original.filter(
+            ImageFilter.UnsharpMask(
+                radius=UNSHARP_RADIUS,
+                percent=UNSHARP_PERCENT,
+                threshold=UNSHARP_THRESHOLD,
+            )
+        )
+
     canvas = Image.new('RGB', (CANVAS_SIZE, CANVAS_SIZE), (255, 255, 255))
 
     if scaled_w <= CANVAS_SIZE and scaled_h <= CANVAS_SIZE:
@@ -301,8 +347,8 @@ def rescale_to_template(user_image_path, template_name):
         y_offset = (CANVAS_SIZE - scaled_h) // 2
         canvas.paste(scaled_original, (x_offset, y_offset))
     else:
-        # Product is larger than the 500x500 canvas at its matched (real)
-        # size. Crop the overflow (white margin / excess frame) around it
+        # Product is larger than the canvas at its matched (real) size.
+        # Crop the overflow (white margin / excess frame) around it
         # instead of shrinking the whole image back down, which would undo
         # the size-matching we just did.
         left = max(0, (scaled_w - CANVAS_SIZE) // 2)
@@ -315,7 +361,7 @@ def rescale_to_template(user_image_path, template_name):
         paste_y = (CANVAS_SIZE - cropped.height) // 2
         canvas.paste(cropped, (paste_x, paste_y))
 
-    return canvas
+    return canvas, fit_scale
 
 
 @app.route('/create-template', methods=['POST'])
@@ -359,7 +405,8 @@ def list_templates():
 @app.route('/process', methods=['POST'])
 def process_image():
     """Trace (for measurement only) + uniformly size-match a product photo
-    to a template, output 500x500 using the original photo's pixels"""
+    to a template, output CANVAS_SIZE x CANVAS_SIZE using the original
+    photo's pixels"""
     if 'image' not in request.files:
         return jsonify({'error': 'No image provided'}), 400
 
@@ -370,7 +417,7 @@ def process_image():
         temp_path = "temp_user.png"
         file.save(temp_path)
 
-        result_image = rescale_to_template(temp_path, template_name)
+        result_image, fit_scale = rescale_to_template(temp_path, template_name)
 
         filename = generate_hash_filename()
         output_path = os.path.join(OUTPUT_DIR, filename)
@@ -380,6 +427,11 @@ def process_image():
 
         response = send_file(output_path, mimetype='image/png', as_attachment=True, download_name=filename)
         response.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
+        # Surface upscale info so callers can warn the user when we had to
+        # meaningfully enlarge their photo beyond its native resolution
+        # (visible softness is expected/unavoidable past this point).
+        response.headers['X-Fit-Scale'] = f'{fit_scale:.4f}'
+        response.headers['X-Upscaled'] = 'true' if fit_scale > UPSCALE_WARNING_THRESHOLD else 'false'
 
         try:
             os.remove(output_path)

@@ -1,10 +1,25 @@
 {
-  "te": {
-    "template_path": "templates/te_template.png",
-    "width": 273,
-    "height": 390,
-    "target_width": 280,
-    "target_height": 400
+  "cc": {
+    "template_path": "templates/cc_template.png",
+    "width": 157,
+    "height": 555,
+    "target_width": 158,
+    "target_height": 560
   },
-  "_scale_factor": 1.0256410256410255
+  "_scale_factor": 1.009009009009009,
+  "_scale_factor_canvas_size": 700,
+  "vvvvvv": {
+    "template_path": "templates/vvvvvv_template.png",
+    "width": 483,
+    "height": 559,
+    "target_width": 487,
+    "target_height": 564
+  },
+  "dui": {
+    "template_path": "templates/dui_template.png",
+    "width": 165,
+    "height": 556,
+    "target_width": 166,
+    "target_height": 561
+  }
 }
